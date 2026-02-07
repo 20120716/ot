@@ -2,150 +2,168 @@
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
-    <title>シンプル・オセロ</title>
-    <style>
-        body { font-family: sans-serif; display: flex; flex-direction: column; align-items: center; background: #f0f0f0; }
-        #menu, #game-container { background: white; padding: 20px; border-radius: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); margin-top: 20px; text-align: center; }
-        .hidden { display: none; }
-        #board { display: grid; grid-template-columns: repeat(8, 40px); grid-template-rows: repeat(8, 40px); background: #1a531b; border: 2px solid #000; }
-        .cell { width: 40px; height: 40px; border: 1px solid #000; display: flex; justify-content: center; align-items: center; cursor: pointer; }
-        .stone { width: 34px; height: 34px; border-radius: 50%; display: none; }
-        .black { display: block; background: black; }
-        .white { display: block; background: white; }
-        button { padding: 10px 20px; font-size: 16px; cursor: pointer; margin: 5px; }
-        #info { margin-bottom: 10px; font-weight: bold; }
-    </style>
-</head>
-<body>
+    <title>オンライン・オセロ</title>
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
+        import { getDatabase, ref, set, onValue, update, get } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-database.js";
 
-    <div id="menu">
-        <h1>オセロ</h1>
-        <button onclick="startGame(1)">1P vs CPU</button>
-        <button onclick="startGame(2)">2P vs 2P</button>
-    </div>
+        // 君が送ってくれた設定を反映したよ！
+        const firebaseConfig = {
+            apiKey: "AIzaSyA_NiCTmJwDA0nWNISNYaQXNuih6XRGQWE",
+            authDomain: "othello-bae8a.firebaseapp.com",
+            databaseURL: "https://othello-bae8a-default-rtdb.firebaseio.com",
+            projectId: "othello-bae8a",
+            storageBucket: "othello-bae8a.firebasestorage.app",
+            messagingSenderId: "265645164943",
+            appId: "1:265645164943:web:fe9e04fcf3b61cadc723fa",
+            measurementId: "G-D28D7RMZFQ"
+        };
 
-    <div id="game-container" class="hidden">
-        <div id="info">黒の番です</div>
-        <div id="board"></div>
-        <div style="margin-top: 15px;">
-            <button onclick="backToMenu()">メニューに戻る</button>
-        </div>
-    </div>
+        const app = initializeApp(firebaseConfig);
+        const db = getDatabase(app);
 
-    <script>
-        const boardElem = document.getElementById('board');
-        const infoElem = document.getElementById('info');
-        let board = [];
-        let turn = 1; // 1: 黒, 2: 白
-        let gameMode = 2; // 1: vs CPU, 2: vs Human
-        const directions = [[-1,-1],[-1,0],[-1,1],[0,-1],[0,1],[1,-1],[1,0],[1,1]];
+        let roomRef, myColor, currentRole;
+        let board = Array(8).fill().map(() => Array(8).fill(0));
+        let turn = 1;
 
-        function startGame(mode) {
-            gameMode = mode;
+        // メニュー操作用に関数をwindowに登録
+        window.showRoomSetup = (role) => {
+            currentRole = role;
             document.getElementById('menu').classList.add('hidden');
+            document.getElementById('room-setup').classList.remove('hidden');
+            document.getElementById('setup-title').innerText = role === 'host' ? '部屋を作る' : '部屋に入る';
+        };
+
+        window.handleRoomAction = async () => {
+            const rId = document.getElementById('room-id').value;
+            const rPass = document.getElementById('room-pass').value;
+            if(!rId || !rPass) return alert("部屋名とパスを入力してね");
+
+            roomRef = ref(db, 'rooms/' + rId);
+            const snap = await get(roomRef);
+            const data = snap.val();
+
+            if (currentRole === 'host') {
+                if(data) return alert("その部屋名はもう使われてるよ");
+                myColor = 1; // 黒
+                await set(roomRef, {
+                    password: rPass,
+                    board: JSON.stringify(initBoardData()),
+                    turn: 1,
+                    status: 'waiting'
+                });
+            } else {
+                if(!data || data.password !== rPass) return alert("部屋がないか、パスが違うよ");
+                myColor = 2; // 白
+                await update(roomRef, { status: 'playing' });
+            }
+            startSync();
+        };
+
+        function initBoardData() {
+            let b = Array(8).fill().map(() => Array(8).fill(0));
+            b[3][3]=2; b[3][4]=1; b[4][3]=1; b[4][4]=2;
+            return b;
+        }
+
+        function startSync() {
+            document.getElementById('room-setup').classList.add('hidden');
             document.getElementById('game-container').classList.remove('hidden');
-            initBoard();
-        }
 
-        function backToMenu() {
-            document.getElementById('menu').classList.remove('hidden');
-            document.getElementById('game-container').classList.add('hidden');
-        }
-
-        function initBoard() {
-            board = Array(8).fill().map(() => Array(8).fill(0));
-            board[3][3] = 2; board[3][4] = 1;
-            board[4][3] = 1; board[4][4] = 2;
-            turn = 1;
-            drawBoard();
-            updateInfo();
+            onValue(roomRef, (snap) => {
+                const data = snap.val();
+                if(!data) return;
+                board = JSON.parse(data.board);
+                turn = data.turn;
+                drawBoard();
+                
+                const info = document.getElementById('info');
+                if(data.status === 'waiting') {
+                    info.innerText = "相手(2P)の入室を待ってるよ...";
+                } else {
+                    const turnText = turn === myColor ? "あなたの番！" : "相手が考え中...";
+                    const colorText = myColor === 1 ? "（あなたは黒）" : "（あなたは白）";
+                    info.innerText = turnText + colorText;
+                }
+            });
         }
 
         function drawBoard() {
+            const boardElem = document.getElementById('board');
             boardElem.innerHTML = '';
-            for (let r = 0; r < 8; r++) {
-                for (let c = 0; c < 8; c++) {
+            for(let r=0; r<8; r++) {
+                for(let c=0; c<8; c++) {
                     const cell = document.createElement('div');
                     cell.className = 'cell';
-                    cell.onclick = () => handleMove(r, c);
-                    
+                    cell.onclick = () => move(r, c);
                     const stone = document.createElement('div');
-                    stone.className = 'stone' + (board[r][c] === 1 ? ' black' : board[r][c] === 2 ? ' white' : '');
+                    stone.className = 'stone' + (board[r][c]===1?' black':board[r][c]===2?' white':'');
                     cell.appendChild(stone);
                     boardElem.appendChild(cell);
                 }
             }
         }
 
-        function handleMove(r, c) {
-            if (gameMode === 1 && turn === 2) return; // CPUのターン中はクリック無効
-            if (placeStone(r, c, turn)) {
-                endTurn();
+        async function move(r, c) {
+            if(turn !== myColor) return;
+            if(placeStone(r, c, myColor)) {
+                await update(roomRef, { board: JSON.stringify(board), turn: 3 - myColor });
             }
         }
 
-        function placeStone(r, c, color, simulate = false) {
-            if (board[r][c] !== 0) return false;
+        function placeStone(r, c, color) {
+            if(board[r][c] !== 0) return false;
             let canFlip = false;
-            directions.forEach(([dr, dc]) => {
+            const dirs = [[-1,-1],[-1,0],[-1,1],[0,-1],[0,1],[1,-1],[1,0],[1,1]];
+            dirs.forEach(([dr, dc]) => {
                 let nr = r + dr, nc = c + dc, count = 0;
-                while (nr >= 0 && nr < 8 && nc >= 0 && nc < 8 && board[nr][nc] === 3 - color) {
-                    nr += dr; nc += dc; count++;
+                while(nr>=0 && nr<8 && nc>=0 && nc<8 && board[nr][nc] === 3-color) {
+                    nr+=dr; nc+=dc; count++;
                 }
-                if (count > 0 && nr >= 0 && nr < 8 && nc >= 0 && nc < 8 && board[nr][nc] === color) {
+                if(count>0 && nr>=0 && nr<8 && nc>=0 && nc<8 && board[nr][nc] === color) {
                     canFlip = true;
-                    if (!simulate) {
-                        for (let i = 1; i <= count; i++) board[r + dr * i][c + dc * i] = color;
-                    }
+                    for(let i=1; i<=count; i++) board[r+dr*i][c+dc*i] = color;
                 }
             });
-            if (canFlip && !simulate) {
-                board[r][c] = color;
-                drawBoard();
-            }
+            if(canFlip) board[r][c] = color;
             return canFlip;
         }
-
-        function endTurn() {
-            turn = 3 - turn;
-            if (!hasValidMove(turn)) {
-                turn = 3 - turn; // パス
-                if (!hasValidMove(turn)) return gameOver();
-            }
-            updateInfo();
-            if (gameMode === 1 && turn === 2) setTimeout(cpuMove, 600);
-        }
-
-        function hasValidMove(color) {
-            for (let r = 0; r < 8; r++)
-                for (let c = 0; c < 8; c++)
-                    if (placeStone(r, c, color, true)) return true;
-            return false;
-        }
-
-        function cpuMove() {
-            let moves = [];
-            for (let r = 0; r < 8; r++)
-                for (let c = 0; c < 8; c++)
-                    if (placeStone(r, c, 2, true)) moves.push({r, c});
-            
-            if (moves.length > 0) {
-                const move = moves[Math.floor(Math.random() * moves.length)];
-                placeStone(move.r, move.c, 2);
-                endTurn();
-            }
-        }
-
-        function updateInfo() {
-            infoElem.innerText = `${turn === 1 ? '黒' : '白'}の番です`;
-        }
-
-        function gameOver() {
-            const black = board.flat().filter(x => x === 1).length;
-            const white = board.flat().filter(x => x === 2).length;
-            alert(`ゲーム終了！\n黒: ${black}, 白: ${white}\n${black > white ? '黒の勝ち！' : white > black ? '白の勝ち！' : '引き分け'}`);
-            backToMenu();
-        }
     </script>
+
+    <style>
+        body { font-family: 'Hiragino Kaku Gothic ProN', sans-serif; display: flex; flex-direction: column; align-items: center; background: #c8e6c9; }
+        #menu, #game-container, #room-setup { background: white; padding: 30px; border-radius: 20px; box-shadow: 0 8px 16px rgba(0,0,0,0.2); margin-top: 40px; text-align: center; width: 350px; }
+        .hidden { display: none; }
+        #board { display: grid; grid-template-columns: repeat(8, 40px); grid-template-rows: repeat(8, 40px); background: #2e7d32; border: 5px solid #1b5e20; margin: 0 auto; }
+        .cell { width: 40px; height: 40px; border: 0.5px solid rgba(0,0,0,0.3); display: flex; justify-content: center; align-items: center; cursor: pointer; }
+        .stone { width: 34px; height: 34px; border-radius: 50%; display: none; box-shadow: 0 3px 5px rgba(0,0,0,0.4); }
+        .black { display: block; background: #222; }
+        .white { display: block; background: #fff; }
+        input { padding: 10px; margin: 10px 0; border: 2px solid #ddd; border-radius: 8px; width: 80%; }
+        button { padding: 12px 24px; cursor: pointer; margin: 10px 5px; background: #2e7d32; color: white; border: none; border-radius: 10px; font-weight: bold; transition: 0.2s; }
+        button:hover { background: #1b5e20; transform: translateY(-2px); }
+        #info { margin-bottom: 20px; font-size: 1.1rem; font-weight: bold; color: #1b5e20; min-height: 1.5em; }
+    </style>
+</head>
+<body>
+    <div id="menu">
+        <h1 style="color: #2e7d32;">Online Othello</h1>
+        <button onclick="showRoomSetup('host')">部屋を作る (1P)</button><br>
+        <button onclick="showRoomSetup('guest')">部屋に入る (2P)</button>
+    </div>
+
+    <div id="room-setup" class="hidden">
+        <h2 id="setup-title">部屋設定</h2>
+        <input type="text" id="room-id" placeholder="部屋の名前"><br>
+        <input type="password" id="room-pass" placeholder="合言葉"><br>
+        <button onclick="handleRoomAction()">準備完了！</button>
+        <button onclick="location.reload()" style="background:#888">戻る</button>
+    </div>
+
+    <div id="game-container" class="hidden">
+        <div id="info">準備中...</div>
+        <div id="board"></div>
+        <p style="font-size: 0.8rem; color: #666; margin-top: 25px;">友達に「部屋名」と「合言葉」を教えてね</p>
+    </div>
 </body>
 </html>
