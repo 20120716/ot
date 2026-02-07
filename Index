@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <title>シンプル・オセロ</title>
+    <style>
+        body { font-family: sans-serif; display: flex; flex-direction: column; align-items: center; background: #f0f0f0; }
+        #menu, #game-container { background: white; padding: 20px; border-radius: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); margin-top: 20px; text-align: center; }
+        .hidden { display: none; }
+        #board { display: grid; grid-template-columns: repeat(8, 40px); grid-template-rows: repeat(8, 40px); background: #1a531b; border: 2px solid #000; }
+        .cell { width: 40px; height: 40px; border: 1px solid #000; display: flex; justify-content: center; align-items: center; cursor: pointer; }
+        .stone { width: 34px; height: 34px; border-radius: 50%; display: none; }
+        .black { display: block; background: black; }
+        .white { display: block; background: white; }
+        button { padding: 10px 20px; font-size: 16px; cursor: pointer; margin: 5px; }
+        #info { margin-bottom: 10px; font-weight: bold; }
+    </style>
+</head>
+<body>
+
+    <div id="menu">
+        <h1>オセロ</h1>
+        <button onclick="startGame(1)">1P vs CPU</button>
+        <button onclick="startGame(2)">2P vs 2P</button>
+    </div>
+
+    <div id="game-container" class="hidden">
+        <div id="info">黒の番です</div>
+        <div id="board"></div>
+        <div style="margin-top: 15px;">
+            <button onclick="backToMenu()">メニューに戻る</button>
+        </div>
+    </div>
+
+    <script>
+        const boardElem = document.getElementById('board');
+        const infoElem = document.getElementById('info');
+        let board = [];
+        let turn = 1; // 1: 黒, 2: 白
+        let gameMode = 2; // 1: vs CPU, 2: vs Human
+        const directions = [[-1,-1],[-1,0],[-1,1],[0,-1],[0,1],[1,-1],[1,0],[1,1]];
+
+        function startGame(mode) {
+            gameMode = mode;
+            document.getElementById('menu').classList.add('hidden');
+            document.getElementById('game-container').classList.remove('hidden');
+            initBoard();
+        }
+
+        function backToMenu() {
+            document.getElementById('menu').classList.remove('hidden');
+            document.getElementById('game-container').classList.add('hidden');
+        }
+
+        function initBoard() {
+            board = Array(8).fill().map(() => Array(8).fill(0));
+            board[3][3] = 2; board[3][4] = 1;
+            board[4][3] = 1; board[4][4] = 2;
+            turn = 1;
+            drawBoard();
+            updateInfo();
+        }
+
+        function drawBoard() {
+            boardElem.innerHTML = '';
+            for (let r = 0; r < 8; r++) {
+                for (let c = 0; c < 8; c++) {
+                    const cell = document.createElement('div');
+                    cell.className = 'cell';
+                    cell.onclick = () => handleMove(r, c);
+                    
+                    const stone = document.createElement('div');
+                    stone.className = 'stone' + (board[r][c] === 1 ? ' black' : board[r][c] === 2 ? ' white' : '');
+                    cell.appendChild(stone);
+                    boardElem.appendChild(cell);
+                }
+            }
+        }
+
+        function handleMove(r, c) {
+            if (gameMode === 1 && turn === 2) return; // CPUのターン中はクリック無効
+            if (placeStone(r, c, turn)) {
+                endTurn();
+            }
+        }
+
+        function placeStone(r, c, color, simulate = false) {
+            if (board[r][c] !== 0) return false;
+            let canFlip = false;
+            directions.forEach(([dr, dc]) => {
+                let nr = r + dr, nc = c + dc, count = 0;
+                while (nr >= 0 && nr < 8 && nc >= 0 && nc < 8 && board[nr][nc] === 3 - color) {
+                    nr += dr; nc += dc; count++;
+                }
+                if (count > 0 && nr >= 0 && nr < 8 && nc >= 0 && nc < 8 && board[nr][nc] === color) {
+                    canFlip = true;
+                    if (!simulate) {
+                        for (let i = 1; i <= count; i++) board[r + dr * i][c + dc * i] = color;
+                    }
+                }
+            });
+            if (canFlip && !simulate) {
+                board[r][c] = color;
+                drawBoard();
+            }
+            return canFlip;
+        }
+
+        function endTurn() {
+            turn = 3 - turn;
+            if (!hasValidMove(turn)) {
+                turn = 3 - turn; // パス
+                if (!hasValidMove(turn)) return gameOver();
+            }
+            updateInfo();
+            if (gameMode === 1 && turn === 2) setTimeout(cpuMove, 600);
+        }
+
+        function hasValidMove(color) {
+            for (let r = 0; r < 8; r++)
+                for (let c = 0; c < 8; c++)
+                    if (placeStone(r, c, color, true)) return true;
+            return false;
+        }
+
+        function cpuMove() {
+            let moves = [];
+            for (let r = 0; r < 8; r++)
+                for (let c = 0; c < 8; c++)
+                    if (placeStone(r, c, 2, true)) moves.push({r, c});
+            
+            if (moves.length > 0) {
+                const move = moves[Math.floor(Math.random() * moves.length)];
+                placeStone(move.r, move.c, 2);
+                endTurn();
+            }
+        }
+
+        function updateInfo() {
+            infoElem.innerText = `${turn === 1 ? '黒' : '白'}の番です`;
+        }
+
+        function gameOver() {
+            const black = board.flat().filter(x => x === 1).length;
+            const white = board.flat().filter(x => x === 2).length;
+            alert(`ゲーム終了！\n黒: ${black}, 白: ${white}\n${black > white ? '黒の勝ち！' : white > black ? '白の勝ち！' : '引き分け'}`);
+            backToMenu();
+        }
+    </script>
+</body>
+</html>
