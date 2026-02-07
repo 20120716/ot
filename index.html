@@ -2,12 +2,11 @@
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
-    <title>オンライン・オセロ</title>
+    <title>オセロ・オンライン＆CPU</title>
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
         import { getDatabase, ref, set, onValue, update, get } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-database.js";
 
-        // 君が送ってくれた設定を反映したよ！
         const firebaseConfig = {
             apiKey: "AIzaSyA_NiCTmJwDA0nWNISNYaQXNuih6XRGQWE",
             authDomain: "othello-bae8a.firebaseapp.com",
@@ -22,12 +21,24 @@
         const app = initializeApp(firebaseConfig);
         const db = getDatabase(app);
 
-        let roomRef, myColor, currentRole;
+        let roomRef, myColor, currentRole, isCPU = false;
         let board = Array(8).fill().map(() => Array(8).fill(0));
         let turn = 1;
 
-        // メニュー操作用に関数をwindowに登録
+        // メニュー
+        window.startCPUGame = () => {
+            isCPU = true;
+            myColor = 1; // 黒
+            document.getElementById('menu').classList.add('hidden');
+            document.getElementById('game-container').classList.remove('hidden');
+            board = initBoardData();
+            turn = 1;
+            updateInfo("CPU戦：あなたの番（黒）");
+            drawBoard();
+        };
+
         window.showRoomSetup = (role) => {
+            isCPU = false;
             currentRole = role;
             document.getElementById('menu').classList.add('hidden');
             document.getElementById('room-setup').classList.remove('hidden');
@@ -37,24 +48,17 @@
         window.handleRoomAction = async () => {
             const rId = document.getElementById('room-id').value;
             const rPass = document.getElementById('room-pass').value;
-            if(!rId || !rPass) return alert("部屋名とパスを入力してね");
+            if(!rId || !rPass) return alert("入力してね");
 
             roomRef = ref(db, 'rooms/' + rId);
             const snap = await get(roomRef);
-            const data = snap.val();
-
             if (currentRole === 'host') {
-                if(data) return alert("その部屋名はもう使われてるよ");
-                myColor = 1; // 黒
-                await set(roomRef, {
-                    password: rPass,
-                    board: JSON.stringify(initBoardData()),
-                    turn: 1,
-                    status: 'waiting'
-                });
+                if(snap.exists()) return alert("その部屋名は既にあります");
+                myColor = 1;
+                await set(roomRef, { password: rPass, board: JSON.stringify(initBoardData()), turn: 1, status: 'waiting' });
             } else {
-                if(!data || data.password !== rPass) return alert("部屋がないか、パスが違うよ");
-                myColor = 2; // 白
+                if(!snap.exists() || snap.val().password !== rPass) return alert("パスが違うよ");
+                myColor = 2;
                 await update(roomRef, { status: 'playing' });
             }
             startSync();
@@ -69,22 +73,14 @@
         function startSync() {
             document.getElementById('room-setup').classList.add('hidden');
             document.getElementById('game-container').classList.remove('hidden');
-
             onValue(roomRef, (snap) => {
                 const data = snap.val();
                 if(!data) return;
                 board = JSON.parse(data.board);
                 turn = data.turn;
                 drawBoard();
-                
-                const info = document.getElementById('info');
-                if(data.status === 'waiting') {
-                    info.innerText = "相手(2P)の入室を待ってるよ...";
-                } else {
-                    const turnText = turn === myColor ? "あなたの番！" : "相手が考え中...";
-                    const colorText = myColor === 1 ? "（あなたは黒）" : "（あなたは白）";
-                    info.innerText = turnText + colorText;
-                }
+                if(data.status === 'waiting') updateInfo("相手の入室待ち...");
+                else updateInfo((turn === myColor ? "あなたの番！" : "相手が考え中...") + (myColor === 1 ? "（黒）" : "（白）"));
             });
         }
 
@@ -107,63 +103,105 @@
         async function move(r, c) {
             if(turn !== myColor) return;
             if(placeStone(r, c, myColor)) {
-                await update(roomRef, { board: JSON.stringify(board), turn: 3 - myColor });
+                if(isCPU) {
+                    turn = 2;
+                    updateInfo("CPUが考え中...");
+                    drawBoard();
+                    setTimeout(cpuLogic, 800);
+                } else {
+                    await update(roomRef, { board: JSON.stringify(board), turn: 3 - myColor });
+                }
             }
         }
 
-        function placeStone(r, c, color) {
+        function cpuLogic() {
+            let moves = [];
+            for(let r=0; r<8; r++) {
+                for(let c=0; c<8; c++) {
+                    if(canPlace(r, c, 2)) moves.push({r, c});
+                }
+            }
+            if(moves.length > 0) {
+                // 角を取れるなら取る、なければランダム
+                const corners = moves.filter(m => (m.r===0||m.r===7) && (m.c===0||m.c===7));
+                const target = corners.length > 0 ? corners[0] : moves[Math.floor(Math.random() * moves.length)];
+                placeStone(target.r, target.c, 2);
+            }
+            turn = 1;
+            if(!canPlayerMove(1)) { // プレイヤーが打てないならCPUが連打
+                if(canPlayerMove(2)) setTimeout(cpuLogic, 800);
+                else alert("対局終了！");
+            }
+            updateInfo("あなたの番（黒）");
+            drawBoard();
+        }
+
+        function canPlace(r, c, color) {
             if(board[r][c] !== 0) return false;
-            let canFlip = false;
+            let found = false;
             const dirs = [[-1,-1],[-1,0],[-1,1],[0,-1],[0,1],[1,-1],[1,0],[1,1]];
             dirs.forEach(([dr, dc]) => {
                 let nr = r + dr, nc = c + dc, count = 0;
+                while(nr>=0 && nr<8 && nc>=0 && nc<8 && board[nr][nc] === 3-color) { nr+=dr; nc+=dc; count++; }
+                if(count>0 && nr>=0 && nr<8 && nc>=0 && nc<8 && board[nr][nc] === color) found = true;
+            });
+            return found;
+        }
+
+        function canPlayerMove(color) {
+            for(let r=0; r<8; r++) for(let c=0; c<8; c++) if(canPlace(r, c, color)) return true;
+            return false;
+        }
+
+        function placeStone(r, c, color) {
+            if(!canPlace(r, c, color)) return false;
+            const dirs = [[-1,-1],[-1,0],[-1,1],[0,-1],[0,1],[1,-1],[1,0],[1,1]];
+            dirs.forEach(([dr, dc]) => {
+                let nr = r + dr, nc = c + dc, path = [];
                 while(nr>=0 && nr<8 && nc>=0 && nc<8 && board[nr][nc] === 3-color) {
-                    nr+=dr; nc+=dc; count++;
+                    path.push({r:nr, c:nc}); nr+=dr; nc+=dc;
                 }
-                if(count>0 && nr>=0 && nr<8 && nc>=0 && nc<8 && board[nr][nc] === color) {
-                    canFlip = true;
-                    for(let i=1; i<=count; i++) board[r+dr*i][c+dc*i] = color;
+                if(path.length>0 && nr>=0 && nr<8 && nc>=0 && nc<8 && board[nr][nc] === color) {
+                    path.forEach(p => board[p.r][p.c] = color);
                 }
             });
-            if(canFlip) board[r][c] = color;
-            return canFlip;
+            board[r][c] = color;
+            return true;
         }
-    </script>
 
+        function updateInfo(txt) { document.getElementById('info').innerText = txt; }
+    </script>
     <style>
-        body { font-family: 'Hiragino Kaku Gothic ProN', sans-serif; display: flex; flex-direction: column; align-items: center; background: #c8e6c9; }
-        #menu, #game-container, #room-setup { background: white; padding: 30px; border-radius: 20px; box-shadow: 0 8px 16px rgba(0,0,0,0.2); margin-top: 40px; text-align: center; width: 350px; }
+        body { font-family: sans-serif; display: flex; flex-direction: column; align-items: center; background: #cfd8dc; }
+        #menu, #room-setup, #game-container { background: white; padding: 25px; border-radius: 15px; box-shadow: 0 4px 10px rgba(0,0,0,0.2); margin-top: 30px; text-align: center; width: 340px; }
         .hidden { display: none; }
-        #board { display: grid; grid-template-columns: repeat(8, 40px); grid-template-rows: repeat(8, 40px); background: #2e7d32; border: 5px solid #1b5e20; margin: 0 auto; }
-        .cell { width: 40px; height: 40px; border: 0.5px solid rgba(0,0,0,0.3); display: flex; justify-content: center; align-items: center; cursor: pointer; }
-        .stone { width: 34px; height: 34px; border-radius: 50%; display: none; box-shadow: 0 3px 5px rgba(0,0,0,0.4); }
-        .black { display: block; background: #222; }
+        #board { display: grid; grid-template-columns: repeat(8, 40px); grid-template-rows: repeat(8, 40px); background: #2e7d32; border: 4px solid #1b5e20; margin: 0 auto; }
+        .cell { width: 40px; height: 40px; border: 0.5px solid rgba(0,0,0,0.2); display: flex; justify-content: center; align-items: center; cursor: pointer; }
+        .stone { width: 34px; height: 34px; border-radius: 50%; display: none; box-shadow: 0 2px 4px rgba(0,0,0,0.3); }
+        .black { display: block; background: #000; }
         .white { display: block; background: #fff; }
-        input { padding: 10px; margin: 10px 0; border: 2px solid #ddd; border-radius: 8px; width: 80%; }
-        button { padding: 12px 24px; cursor: pointer; margin: 10px 5px; background: #2e7d32; color: white; border: none; border-radius: 10px; font-weight: bold; transition: 0.2s; }
-        button:hover { background: #1b5e20; transform: translateY(-2px); }
-        #info { margin-bottom: 20px; font-size: 1.1rem; font-weight: bold; color: #1b5e20; min-height: 1.5em; }
+        button { padding: 12px; margin: 8px; width: 80%; cursor: pointer; background: #2e7d32; color: white; border: none; border-radius: 8px; font-weight: bold; }
+        #info { margin-bottom: 15px; font-weight: bold; color: #1b5e20; }
     </style>
 </head>
 <body>
     <div id="menu">
-        <h1 style="color: #2e7d32;">Online Othello</h1>
-        <button onclick="showRoomSetup('host')">部屋を作る (1P)</button><br>
-        <button onclick="showRoomSetup('guest')">部屋に入る (2P)</button>
+        <h1 style="color:#1b5e20">Othello Online</h1>
+        <button onclick="startCPUGame()">CPUと対戦 (1人)</button>
+        <button onclick="showRoomSetup('host')">部屋を作る (2人)</button>
+        <button onclick="showRoomSetup('guest')">部屋に入る (2人)</button>
     </div>
-
     <div id="room-setup" class="hidden">
         <h2 id="setup-title">部屋設定</h2>
-        <input type="text" id="room-id" placeholder="部屋の名前"><br>
-        <input type="password" id="room-pass" placeholder="合言葉"><br>
-        <button onclick="handleRoomAction()">準備完了！</button>
+        <input type="text" id="room-id" placeholder="部屋名" style="padding:10px; width:80%; margin:5px;"><br>
+        <input type="password" id="room-pass" placeholder="合言葉" style="padding:10px; width:80%; margin:5px;"><br>
+        <button onclick="handleRoomAction()">対戦開始</button>
         <button onclick="location.reload()" style="background:#888">戻る</button>
     </div>
-
     <div id="game-container" class="hidden">
-        <div id="info">準備中...</div>
+        <div id="info"></div>
         <div id="board"></div>
-        <p style="font-size: 0.8rem; color: #666; margin-top: 25px;">友達に「部屋名」と「合言葉」を教えてね</p>
+        <button onclick="location.reload()" style="background:#888; margin-top:20px; width:auto;">終了して戻る</button>
     </div>
 </body>
 </html>
